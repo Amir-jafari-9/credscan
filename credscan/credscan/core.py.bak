@@ -1,0 +1,160 @@
+cat > credscan/core.py << 'EOF'
+from pathlib import Path
+import re
+from .utils import clean_text, extract_domain
+from .readers import get_reader
+
+class Scanner:
+    def __init__(self, config: dict):
+        self.password_keywords = [kw.lower() for kw in config['password_keywords']]
+        self.url_patterns = [re.compile(pat) for pat in config['url_patterns']]
+        self.output_format = config['output']['format']
+        self.false_positive_patterns = [
+            re.compile(r'Is[A-Z][a-z]*Password'),
+            re.compile(r'password[A-Z]'),
+            re.compile(r'password\.'), 
+            re.compile(r'passwordField'),
+            re.compile(r'passwordInput'),
+            re.compile(r'passwordLabel'),
+            re.compile(r'passwordValidation'),
+            re.compile(r'passwordConfirmation'),
+            re.compile(r'passwordRequired'),
+            re.compile(r'passwordRules'),
+            re.compile(r'passwordPolicy'),
+            re.compile(r'passwordStrength'),
+            re.compile(r'passwordChange'),
+            re.compile(r'passwordReset'),
+            re.compile(r'passwordRegex'),
+            re.compile(r'passwordMinLength'),
+            re.compile(r'passwordErrorMessage'),
+            re.compile(r'passwordConfirm'),
+            re.compile(r'passwordMatch'),
+            re.compile(r'passwordValid'),
+            re.compile(r'passwordHash'),
+            re.compile(r'passwordEncrypt'),
+            re.compile(r'passwordVerify'),
+            re.compile(r'passwordCompare'),
+            re.compile(r'passwordChanged'),
+            re.compile(r'passwordToken'),
+            re.compile(r'passwordRecovery'),
+            re.compile(r'passwordResetToken'),
+            re.compile(r'passwordResetLink'),
+            re.compile(r'passwordResetForm'),
+            re.compile(r'passwordResetRequest'),
+            re.compile(r'passwordResetSuccess'),
+            re.compile(r'passwordResetError'),
+            re.compile(r'passwordResetComplete'),
+            re.compile(r'passwordResetExpired'),
+            re.compile(r'passwordResetInvalid'),
+            re.compile(r'passwordResetConfirmed'),
+            re.compile(r'passwordResetConfirmation'),
+            re.compile(r'passwordResetConfirmationSent'),
+            re.compile(r'passwordResetConfirmationFailed'),
+            re.compile(r'passwordResetConfirmationSuccess'),
+            re.compile(r'passwordResetConfirmationError'),
+            re.compile(r'passwordResetConfirmationExpired'),
+            re.compile(r'passwordResetConfirmationInvalid'),
+            re.compile(r'passwordResetConfirmationConfirmed'),
+            re.compile(r'passwordResetConfirmationComplete'),
+            re.compile(r'passwordResetConfirmationToken'),
+            re.compile(r'passwordResetConfirmationLink'),
+            re.compile(r'passwordResetConfirmationForm'),
+            re.compile(r'passwordResetConfirmationRequest'),
+            re.compile(r'passwordResetConfirmationSuccess'),
+            re.compile(r'passwordResetConfirmationError'),
+            re.compile(r'passwordResetConfirmationExpired'),
+            re.compile(r'passwordResetConfirmationInvalid'),
+            re.compile(r'passwordResetConfirmationConfirmed'),
+            re.compile(r'passwordResetConfirmationComplete')
+        ]
+        
+        # Patterns that indicate an actual password value
+        self.credential_patterns = [
+            # password = "value"
+            re.compile(r'(\b(?:pass(?:word)?|pwd|secret|token|key|credential|auth)\b\s*[=:]\s*[\'"][^\'"]*[\'"])', re.IGNORECASE),
+            # password: "value"
+            re.compile(r'(\b(?:pass(?:word)?|pwd|secret|token|key|credential|auth)\b\s*[:=]\s*[\'"][^\'"]{5,}[\'"])', re.IGNORECASE),
+            # API_KEY=secret123
+            re.compile(r'(\b(?:api[_-]key|secret[_-]key|access[_-]key)\b\s*[=:]\s*\S+)', re.IGNORECASE),
+            # Basic auth patterns
+            re.compile(r'(https?://\w+:[^@/]+@)', re.IGNORECASE),
+            # Common credential formats
+            re.compile(r'(?:admin|root|user|login)[:=]\s*\w+\s+(?:pass|password|pwd)[:=]\s*\w+'), 
+            # JSON-style credentials
+            re.compile(r'["\'](?:password|pwd|pass)["\']\s*[:=]\s*["\'][^"\']{5,}["\']', re.IGNORECASE)
+        ]
+        
+    def is_false_positive(self, line: str, keyword: str) -> bool:
+        """Check if a match is likely a false positive (UI code reference)"""
+        line_lower = line.lower()
+        
+        # Check against known false positive patterns
+        for pattern in self.false_positive_patterns:
+            if pattern.search(line):
+                return True
+                
+        # Check for common UI patterns
+        if re.search(r'\b(?:is|has|show|validate|change|reset|confirm|new|old|current)\s*password\b', line_lower):
+            return True
+            
+        # Check if it's just a variable/property name without value
+        if re.search(r'\b' + keyword + r'\b\s*[;,{\[(]', line_lower):
+            return True
+            
+        return False
+        
+    def is_credible_password(self, line: str) -> bool:
+        """Check if line contains a credible password value using patterns"""
+        for pattern in self.credential_patterns:
+            if pattern.search(line):
+                return True
+        return False
+        
+    def scan_file(self, file_path: Path):
+        """Scan single file for credentials and URLs"""
+        reader = get_reader(file_path)
+        results = {'passwords': [], 'urls': []}
+        
+        try:
+            for line_num, line in enumerate(reader(file_path), 1):
+                clean_line = clean_text(line).strip()
+                if not clean_line:
+                    continue
+                
+                # Password detection - improved logic
+                found_password = False
+                for keyword in self.password_keywords:
+                    if keyword in clean_line.lower():
+                        # Check if it's a false positive
+                        if not self.is_false_positive(clean_line, keyword):
+                            # Additional check for credible password patterns
+                            if self.is_credible_password(clean_line):
+                                results['passwords'].append((line_num, clean_line))
+                                found_password = True
+                                break
+                
+                # URL detection (unchanged)
+                for pattern in self.url_patterns:
+                    for match in pattern.finditer(clean_line):
+                        results['urls'].append((line_num, match.group()))
+                        
+        except Exception as e:
+            results['passwords'].append((0, f"SCANNING ERROR: {str(e)}"))
+            
+        return results
+    
+    def generate_output(self, file_path, results, output_type):
+        """Generate formatted output line"""
+        output_lines = []
+        items = results['passwords'] if output_type == 'passwords' else results['urls']
+        
+        for line_num, content in items:
+            line = self.output_format.format(
+                path=str(file_path),
+                line=line_num,
+                content=content
+            )
+            output_lines.append(line)
+            
+        return output_lines
+EOF

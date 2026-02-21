@@ -1,0 +1,5 @@
+python-docx>=0.8.11
+openpyxl>=3.1.0
+chardet>=5.2.0
+tqdm>=4.67.0
+PyYAML>=6.0

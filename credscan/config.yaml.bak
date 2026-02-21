@@ -1,0 +1,24 @@
+cat > config.yaml << 'EOF'
+# CredScan Configuration
+search_paths:
+  - ./documents
+
+password_keywords:
+  - password
+  - pass
+  - pwd
+  - secret
+  - token
+  - api_key
+  - credential
+  - login
+
+url_patterns:
+  - "https?://[\\w\\.-]+(?:/[\\w\\./?=&#%\\-]*)?"
+  - "www\\.[\\w\\.-]+\\.[a-z]{2,}"
+
+output:
+  passwords_file: "output/passwords_found.txt"
+  urls_file: "output/urls_found.txt"
+  format: "{path}:{line}:{content}"
+EOF
